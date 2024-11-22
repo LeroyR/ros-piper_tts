@@ -1,0 +1,101 @@
+#!/usr/bin/env python
+import rospy
+import actionlib
+import numpy as np
+import sounddevice as sd
+
+from dynamic_reconfigure.server import Server as DynServer
+from piper_tts_cfg.cfg import TTSConfig
+
+from pal_interaction_msgs.msg import TtsAction, TtsGoal, TtsResult, TtsFeedback
+
+from piper_tts import piper_tts
+
+
+class PiperTTSPal(object):
+    # create messages that are used to publish feedback/result
+    _feedback = TtsFeedback()
+    _result = TtsResult()
+
+    def __init__(self, model_dir, default_model):
+        self.model_dir = model_dir
+
+        self.voices = {}
+        model, config = piper_tts.get_model(model_dir, default_model)
+        self.voices[""] = piper_tts.PiperTTS(model, config)
+
+        self._reconfigure_server = DynServer(TTSConfig, self.configure)
+
+        # This is just to warmup the default network
+        data = self.voices[""].synthesize("Good Morning")
+        for d in data:
+            pass
+
+        self._as = actionlib.SimpleActionServer(
+            "/tts",
+            TtsAction,
+            execute_cb=self.execute_cb,
+            auto_start=False,
+        )
+        self._as.start()
+        rospy.loginfo("piper_tts started")
+
+    def configure(self, config: TTSConfig, level):
+        rospy.loginfo(f"reconf: {config}")
+
+        for language in ["de_DE", "en_GB"]:
+            if config[language] == "":
+                continue
+            model, config = piper_tts.get_model(self.model_dir, config[language])
+            self.voices[language] = piper_tts.PiperTTS(model, config)
+
+        return config
+
+    def get_voice(self, langid):
+        if langid in self.voices.keys():
+            return self.voices[langid]
+        else:
+            rospy.logerr(f"failed to find language {langid}")
+            return None
+
+    def execute_cb(self, goal: TtsGoal):
+        r = rospy.Rate(10)
+        success = True
+
+        rospy.loginfo(f"say({goal.rawtext.lang_id}): {goal.rawtext.text}")
+
+        voice = self.get_voice(goal.rawtext.lang_id)
+        if voice is None:
+            self._as.set_succeeded(False)
+            return
+
+        audio_stream = voice.synthesize(goal.rawtext.text)
+
+        for data in audio_stream:
+            npa = np.frombuffer(data, dtype=np.int16)
+            # RawOutputStream does not need np
+            sd.play(npa, voice.samplerate, blocking=False)
+
+            while sd._last_callback.event.is_set() == False:
+                if self._as.is_preempt_requested:
+                    sd.stop()
+                    success = False
+                    break
+                rospy.sleep(0.1)
+
+            if self._as.is_preempt_requested:
+                sd.stop()
+                success = False
+                break
+
+        self._as.set_succeeded(success)
+
+
+if __name__ == "__main__":
+
+    # Start ROS node
+    rospy.init_node("piper_tts_pal")
+    model_dir = rospy.get_param("~model_dir", "/home/robocup-adm/tmp/tts/karlsson")
+    default_model = rospy.get_param("~default_model", "de_DE-karlsson-low")
+    PiperTTSPal(model_dir, default_model)
+    rospy.spin()
