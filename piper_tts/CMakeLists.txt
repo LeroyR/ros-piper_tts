@@ -12,10 +12,11 @@ catkin_package()
 
 install(PROGRAMS
  scripts/direct_piper_tts_pal
+ scripts/forward_piper_tts_pal
  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(DIRECTORY models launch 
+install(DIRECTORY models launch config
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 

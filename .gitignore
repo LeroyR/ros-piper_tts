@@ -4,3 +4,4 @@ install/
 log/
 .colcon_root
 .vscode
+piper_tts/models/*

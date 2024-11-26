@@ -1,0 +1,5 @@
+models:
+  de_DE: 
+    voice: "de_DE-karlsson-low"
+    config: bla
+  en_GB: "en_GB-alan-medium"

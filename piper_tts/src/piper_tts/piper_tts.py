@@ -1,7 +1,6 @@
 from piper import PiperVoice
 import wave
 from pathlib import Path
-import soundfile as sf
 
 import rospy
 
@@ -23,8 +22,12 @@ def get_model(model_dir, model_name):
     if onnx_path.exists() and config_path.exists():
         return (onnx_path, config_path)
     else:
-        rospy.logerr(f"{onnx_path} or {config_path} do not exist")
-        raise rospy.ROSException()
+        if not onnx_path.exists():
+            msg = f"Model not found. '{onnx_path}' does not exist"
+        else:
+            msg = f"Config not found. '{config_path}' does not exist"
+
+        raise rospy.ROSException(msg)
 
 
 class PiperTTS:
@@ -35,16 +38,20 @@ class PiperTTS:
         self.voice = PiperVoice.load(model_path, config_path, use_cuda=use_cuda)
         self._args = settings
         self.samplerate = self.voice.config.sample_rate
+        # print(f"self.voice.config.num_speakers {self.voice.config.num_speakers}")
 
     def synthesize(self, text):
         return self.voice.synthesize_stream_raw(text, **vars(self._args))
 
 
 if __name__ == "__main__":
-    m, c = get_model("/home/robocup-adm/tmp/tts/karlsson", "de_DE-thorsten-high")
-    voice = PiperTTS(m, c)
+    m, c = get_model(
+        "/home/robocup-adm/tmp/tts/ros-piper_tts/piper_tts/models", "de_DE-karlsson-low"
+    )
+    s = synthesize_args()
+    voice = PiperTTS(m, c, s)
 
-    line = "Hallo, ich bin Tiago und heute zeig ich dir wat ich kann"
+    line = "Der Regenbogen ist ein atmosphärisch-optisches Phänomen, das als kreisbogenförmiges farbiges Lichtband in einer von der Sonne beschienenen Regenwand oder -wolke wahrgenommen wird."
 
     # with wave.open("tmp.wav", "wb") as wav_file:
     #    voice.synthesize(line, wav_file, **synthesize_args)
@@ -139,6 +146,8 @@ def make_glados():
 
     filepath = Path("hello.wav")
     output_filepath = filepath.stem + "_pitch_corrected" + filepath.suffix
+
+    import soundfile as sf
 
     # Save the pitch-corrected audio file using soundfile
     sf.write(str(output_filepath), pitch_corrected_y, sr)

@@ -5,7 +5,6 @@ import numpy as np
 import sounddevice as sd
 
 from dynamic_reconfigure.server import Server as DynServer
-from piper_tts_cfg.cfg import TTSConfig
 
 from pal_interaction_msgs.msg import TtsAction, TtsGoal, TtsResult, TtsFeedback
 
@@ -22,35 +21,51 @@ class PiperTTSPal(object):
 
         self.voices = {}
         model, config = piper_tts.get_model(model_dir, default_model)
-        self.voices[""] = piper_tts.PiperTTS(model, config)
+        self.voices["default"] = piper_tts.PiperTTS(model, config)
 
-        self._reconfigure_server = DynServer(TTSConfig, self.configure)
+        self.configure()
 
         # This is just to warmup the default network
-        data = self.voices[""].synthesize("Good Morning")
+        data = self.voices["default"].synthesize("Good Morning")
         for d in data:
             pass
 
         self._as = actionlib.SimpleActionServer(
-            "/tts",
+            "/piper_tts",
             TtsAction,
             execute_cb=self.execute_cb,
             auto_start=False,
         )
         self._as.start()
+
+        self._tts_client = actionlib.SimpleActionClient("/tts", TtsAction)
+        rospy.loginfo("waiting for /tts connection...")
+        self._tts_client.wait_for_server()
+        rospy.loginfo("Connected to /tts")
+
         rospy.loginfo("piper_tts started")
 
-    def configure(self, conf: TTSConfig, level):
-        rospy.loginfo(f"reconf: {conf}")
+    def configure(self):
+        meta_param = rospy.get_param("/piper_tts/models")
+        print(meta_param)
 
-        for language in ["de_DE", "en_GB"]:
-            if conf[language] == "":
-                continue
+        param_names = rospy.get_param_names()
+        self.model_names = []
+        for param_name in param_names:
+            # If the parameter is like '/piper_tts/models/NAME/voice'
+            if "/piper_tts/models" in param_name and "/voice" in param_name:
+                motion_name = param_name.replace("/piper_tts/models/", "")
+                motion_name = motion_name.replace("/voice", "")
+                self.model_names.append(motion_name)
 
-            model, config = piper_tts.get_model(self.model_dir, conf[language])
-            self.voices[language] = piper_tts.PiperTTS(model, config)
+        for model in self.model_names:
+            param = rospy.get_param(f"/piper_tts/models/{model}")
+            voice = param["voice"]
 
-        return conf
+            rospy.loginfo(f"Loading /piper_tts/models/{model} with {voice}")
+
+            onnx, config = piper_tts.get_model(self.model_dir, voice)
+            self.voices[model] = piper_tts.PiperTTS(onnx, config)
 
     def get_voice(self, langid):
         if langid in self.voices.keys():
@@ -59,15 +74,28 @@ class PiperTTSPal(object):
             rospy.logerr(f"failed to find language {langid}")
             return None
 
+    def forward(self, goal):
+        goal.rawtext.lang_id = "en_GB"
+        self._tts_client.send_goal(goal)
+        while self._tts_client.wait_for_result(rospy.Duration(0.01)) != True:
+            if self._as.is_preempt_requested():
+                self._tts_client.cancel_goal()
+                return self._as.set_preempted()
+
+        self._as.set_succeeded()
+
     def execute_cb(self, goal: TtsGoal):
         r = rospy.Rate(10)
         success = True
+
+        if goal.rawtext.lang_id == "" or goal.rawtext.lang_id == "en_GB":
+            return self.forward(goal)
 
         rospy.loginfo(f"say({goal.rawtext.lang_id}): {goal.rawtext.text}")
 
         voice = self.get_voice(goal.rawtext.lang_id)
         if voice is None:
-            self._as.set_succeeded(False)
+            self._as.set_aborted()
             return
 
         audio_stream = voice.synthesize(goal.rawtext.text)
@@ -80,16 +108,15 @@ class PiperTTSPal(object):
             while sd._last_callback.event.is_set() == False:
                 if self._as.is_preempt_requested():
                     sd.stop()
-                    rospy.loginfo(f"preempt")
-                    success = False
-                    break
+                    self._as.set_preempted()
+                    return
                 rospy.sleep(0.1)
 
             if self._as.is_preempt_requested():
                 sd.stop()
-                rospy.loginfo(f"preempt2")
+                self._as.set_preempted()
                 success = False
-                break
+                return
 
         rospy.loginfo(f"playback done {success}")
 
