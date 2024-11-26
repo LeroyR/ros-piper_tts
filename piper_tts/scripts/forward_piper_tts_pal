@@ -63,9 +63,11 @@ class PiperTTSPal(object):
             voice = param["voice"]
 
             rospy.loginfo(f"Loading /piper_tts/models/{model} with {voice}")
-
-            onnx, config = piper_tts.get_model(self.model_dir, voice)
-            self.voices[model] = piper_tts.PiperTTS(onnx, config)
+            try:
+                onnx, config = piper_tts.get_model(self.model_dir, voice)
+                self.voices[model] = piper_tts.PiperTTS(onnx, config)
+            except rospy.ROSException as e:
+                rospy.logwarn(f"could not load '{model}', ignored")
 
     def get_voice(self, langid):
         if langid in self.voices.keys():
